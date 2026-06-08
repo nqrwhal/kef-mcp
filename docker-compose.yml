@@ -4,20 +4,24 @@ services:
     container_name: kef-mcp
     restart: unless-stopped
     env_file: .env
-    # No host port published: only the cloudflared sidecar (same network)
-    # needs to reach it. Reaching the KEF by its LAN IP works from this
-    # bridged container on Docker Desktop for Windows.
+    # No host port published. The only way in is the authenticated poke-tunnel
+    # container on this shared network, so the MCP server doesn't need its own
+    # bearer token (leave MCP_AUTH_TOKEN unset in .env). Reaching the KEF by its
+    # LAN IP works from this bridged container on Docker Desktop for Windows.
     expose:
       - "8000"
 
-  # Cloudflare Tunnel: gives Poke a stable public HTTPS URL with no
-  # port-forwarding. Uses a token-based (remote-managed) tunnel.
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    container_name: kef-tunnel
+  # Official Poke tunnel: forwards the local MCP server up to your Poke agent.
+  # Runs headless via POKE_API_KEY (written to a credentials file at startup)
+  # and restarts on reboot, so it behaves like a service rather than a
+  # foreground `poke tunnel` process.
+  poke-tunnel:
+    build: ./tunnel
+    container_name: kef-poke-tunnel
     restart: unless-stopped
-    command: tunnel --no-autoupdate run
     environment:
-      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+      - POKE_API_KEY=${POKE_API_KEY}
+      - POKE_TUNNEL_NAME=${POKE_TUNNEL_NAME:-KEF + Spotify}
+      - POKE_TUNNEL_TARGET=http://kef-mcp:8000/mcp
     depends_on:
       - kef-mcp

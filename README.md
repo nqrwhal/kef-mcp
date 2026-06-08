@@ -73,9 +73,9 @@ docker compose up -d --build
 docker compose logs -f kef-mcp
 ```
 
-> `docker-compose.yml` also runs a `cloudflared` sidecar for remote access — only
-> needed for cloud clients like Poke. If you don't set `CLOUDFLARE_TUNNEL_TOKEN`,
-> ignore that container.
+> `docker-compose.yml` also runs a `poke-tunnel` sidecar that forwards the MCP
+> server up to your Poke agent (see [`poke/README.md`](./poke/README.md)). Set
+> `POKE_API_KEY` in `.env` to enable it; it's only needed for Poke.
 
 **Or directly:**
 
@@ -86,11 +86,12 @@ python server.py     # serves streamable HTTP at http://0.0.0.0:8000/mcp
 
 ### 4. Connect a client
 
-Point your MCP client at `http://<host>:8000/mcp` (or the public tunnel URL) with
-`Authorization: Bearer <MCP_AUTH_TOKEN>`.
-
-For **Poke** specifically — Cloudflare Tunnel setup, connecting, and the recipe —
-see [`poke/README.md`](./poke/README.md).
+- **Poke:** set `POKE_API_KEY` in `.env` and run `docker compose up -d` — the
+  `poke-tunnel` container connects it automatically. Full guide + the recipe:
+  [`poke/README.md`](./poke/README.md).
+- **Other MCP clients:** point them at `http://<host>:8000/mcp`. (If you expose the
+  server beyond the tunnel, set `MCP_AUTH_TOKEN` and send
+  `Authorization: Bearer <token>`.)
 
 ## Sanity checks
 
@@ -126,9 +127,12 @@ kef-mcp/
 ├── spotify_client.py     # Spotify Web API client
 ├── auth_spotify.py       # one-time Spotify OAuth helper
 ├── Dockerfile
-├── docker-compose.yml    # server + optional cloudflared tunnel
+├── docker-compose.yml    # server + poke-tunnel sidecar
 ├── .env.example
-└── poke/                 # Poke-specific: tunnel guide + recipe
+├── tunnel/               # headless poke-tunnel container
+│   ├── Dockerfile
+│   └── entrypoint.sh
+└── poke/                 # Poke-specific: connection guide + recipe
     ├── README.md
     └── RECIPE.md
 ```
