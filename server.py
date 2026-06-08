@@ -11,6 +11,7 @@ Reached by Poke via a Cloudflare Tunnel -> this container. A bearer token
 from __future__ import annotations
 
 import os
+import re
 
 from fastmcp import FastMCP
 
@@ -197,8 +198,54 @@ async def play_on_kef(query: str, volume: int | None = None) -> str:
     return f"Playing '{query}' on the KEF."
 
 
+# Poke addresses tool calls at a connection-scoped path (/<connectionId>/mcp),
+# while tool sync and the URL you configure use plain /mcp. FastMCP only mounts
+# /mcp, so the connection-scoped calls 404. This middleware rewrites any
+# "/<segment>/mcp..." request to "/mcp..." so both forms resolve to the server.
+_PREFIXED_MCP = re.compile(r"^/[^/]+(/mcp.*)$")
+
+
+class _StripConnIdMiddleware:
+    """Rewrite /<connectionId>/mcp -> /mcp so Poke's connection-scoped tool
+    calls reach the FastMCP app. Non-/mcp paths are left untouched (still 404)."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and not scope.get("path", "").startswith("/mcp"):
+            m = _PREFIXED_MCP.match(scope.get("path", ""))
+            if m:
+                scope = dict(scope)
+                scope["path"] = m.group(1)
+                if scope.get("raw_path"):
+                    scope["raw_path"] = m.group(1).encode()
+        await self.app(scope, receive, send)
+
+
+def build_app():
+    """Build the ASGI app: FastMCP at /mcp, tolerant of a connection-id prefix.
+
+    stateless_http=True avoids 409 Conflict errors caused by session collisions
+    when the Poke tunnel reconnects or opens overlapping sessions.
+    """
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+
+    mcp_app = mcp.http_app(path="/mcp", stateless_http=True)
+    # lifespan MUST be forwarded or the streamable-HTTP session manager isn't
+    # initialized ("Task group is not initialized").
+    parent = Starlette(routes=[Mount("/", app=mcp_app)], lifespan=mcp_app.lifespan)
+    return _StripConnIdMiddleware(parent)
+
+
+app = build_app()
+
+
 if __name__ == "__main__":
+    import uvicorn
+
     host = os.environ.get("MCP_HOST", "0.0.0.0")
     port = int(os.environ.get("MCP_PORT", "8000"))
-    # Streamable-HTTP transport at /mcp — this is the URL you give Poke.
-    mcp.run(transport="http", host=host, port=port, path="/mcp")
+    # Streamable-HTTP transport at /mcp (also accepts /<connectionId>/mcp).
+    uvicorn.run(app, host=host, port=port)
