@@ -75,7 +75,8 @@ docker compose logs -f kef-mcp
 
 > `docker-compose.yml` also runs a `poke-tunnel` sidecar that forwards the MCP
 > server up to your Poke agent (see [`poke/README.md`](./poke/README.md)). Set
-> `POKE_API_KEY` in `.env` to enable it; it's only needed for Poke.
+> `POKE_TUNNEL_TOKEN` in `.env` to enable it (run `npx poke@latest login` once to
+> get it); it's only needed for Poke.
 
 **Or directly:**
 
@@ -86,9 +87,9 @@ python server.py     # serves streamable HTTP at http://0.0.0.0:8000/mcp
 
 ### 4. Connect a client
 
-- **Poke:** set `POKE_API_KEY` in `.env` and run `docker compose up -d` — the
-  `poke-tunnel` container connects it automatically. Full guide + the recipe:
-  [`poke/README.md`](./poke/README.md).
+- **Poke:** set `POKE_TUNNEL_TOKEN` in `.env` (from `npx poke@latest login`) and
+  run `docker compose up -d` — the `poke-tunnel` container connects it
+  automatically. Full guide + the recipe: [`poke/README.md`](./poke/README.md).
 - **Other MCP clients:** point them at `http://<host>:8000/mcp`. (If you expose the
   server beyond the tunnel, set `MCP_AUTH_TOKEN` and send
   `Authorization: Bearer <token>`.)

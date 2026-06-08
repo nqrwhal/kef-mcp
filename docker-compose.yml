@@ -12,14 +12,18 @@ services:
       - "8000"
 
   # Official Poke tunnel: forwards the local MCP server up to your Poke agent.
-  # Runs headless via POKE_API_KEY (written to a credentials file at startup)
-  # and restarts on reboot, so it behaves like a service rather than a
-  # foreground `poke tunnel` process.
+  # Runs headless via POKE_TUNNEL_TOKEN (a login session token written to a
+  # credentials file at startup) and restarts on reboot, so it behaves like a
+  # service rather than a foreground `poke tunnel` process.
   poke-tunnel:
     build: ./tunnel
     container_name: kef-poke-tunnel
     restart: unless-stopped
     environment:
+      # Login session token from `poke login` (~/.config/poke/credentials.json).
+      # This is what `poke tunnel` actually authenticates with.
+      - POKE_TUNNEL_TOKEN=${POKE_TUNNEL_TOKEN}
+      # Fallback for backwards compatibility; the tunnel may reject a kitchen key.
       - POKE_API_KEY=${POKE_API_KEY}
       - POKE_TUNNEL_NAME=${POKE_TUNNEL_NAME:-KEF + Spotify}
       - POKE_TUNNEL_TARGET=http://kef-mcp:8000/mcp
