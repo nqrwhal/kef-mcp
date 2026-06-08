@@ -187,7 +187,7 @@ class SpotifyClient:
         if qartist and c["artist"]:
             s += 0.5 * SequenceMatcher(None, cls._norm(qartist), cls._norm(c["artist"])).ratio()
 
-        s += {"track": 0.10, "album": 0.10, "artist": 0.08, "playlist": 0.0}[c["kind"]]
+        s += {"track": 0.15, "album": 0.15, "artist": 0.12, "playlist": -0.25}[c["kind"]]
         if c["kind"] == "playlist" and cls._PLAYLIST_HINT.search(query):
             s += 0.45
         if c["kind"] == "album" and cls._ALBUM_HINT.search(query):
