@@ -223,6 +223,21 @@ class _StripConnIdMiddleware:
         await self.app(scope, receive, send)
 
 
+async def _no_oauth(request):
+    """Handle OAuth discovery probes.
+
+    Per the MCP spec (RFC 9728), a client fetches /.well-known/oauth-protected-
+    resource only after getting a 401, to discover the auth server. This server
+    has no auth (the Poke tunnel is the trust boundary), so the spec-correct
+    answer is "no such metadata" -> 404. Poke reads that as "no auth required"
+    and proceeds. We register it explicitly so it's an intentional 404 rather
+    than noisy unmatched-route log spam.
+    """
+    from starlette.responses import JSONResponse
+
+    return JSONResponse({"error": "no_auth", "detail": "server requires no auth"}, status_code=404)
+
+
 def build_app():
     """Build the ASGI app: FastMCP at /mcp, tolerant of a connection-id prefix.
 
@@ -230,12 +245,23 @@ def build_app():
     when the Poke tunnel reconnects or opens overlapping sessions.
     """
     from starlette.applications import Starlette
-    from starlette.routing import Mount
+    from starlette.routing import Mount, Route
 
     mcp_app = mcp.http_app(path="/mcp", stateless_http=True)
+    # Explicit, intentional 404s for the OAuth discovery probes Poke sends at
+    # connection setup, so they don't read as mysterious errors in the logs.
+    # Listed before the catch-all Mount so they match first.
+    oauth_paths = [
+        "/.well-known/oauth-protected-resource",
+        "/.well-known/oauth-protected-resource/mcp",
+        "/.well-known/oauth-authorization-server",
+        "/.well-known/oauth-authorization-server/mcp",
+    ]
+    routes = [Route(p, _no_oauth, methods=["GET"]) for p in oauth_paths]
+    routes.append(Mount("/", app=mcp_app))
     # lifespan MUST be forwarded or the streamable-HTTP session manager isn't
     # initialized ("Task group is not initialized").
-    parent = Starlette(routes=[Mount("/", app=mcp_app)], lifespan=mcp_app.lifespan)
+    parent = Starlette(routes=routes, lifespan=mcp_app.lifespan)
     return _StripConnIdMiddleware(parent)
 
 
