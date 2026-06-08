@@ -1,0 +1,23 @@
+services:
+  kef-mcp:
+    build: .
+    container_name: kef-mcp
+    restart: unless-stopped
+    env_file: .env
+    # No host port published: only the cloudflared sidecar (same network)
+    # needs to reach it. Reaching the KEF by its LAN IP works from this
+    # bridged container on Docker Desktop for Windows.
+    expose:
+      - "8000"
+
+  # Cloudflare Tunnel: gives Poke a stable public HTTPS URL with no
+  # port-forwarding. Uses a token-based (remote-managed) tunnel.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: kef-tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - kef-mcp
