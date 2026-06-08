@@ -11,7 +11,9 @@ Scopes needed: user-modify-playback-state user-read-playback-state
 from __future__ import annotations
 
 import base64
+import re
 import time
+from difflib import SequenceMatcher
 
 import httpx
 
@@ -70,7 +72,16 @@ class SpotifyClient:
                 "(or transfer to it) first."
             )
         r.raise_for_status()
-        return r.json() if r.content else {}
+        # Spotify's playback-control endpoints (pause/next/play/volume/transfer)
+        # return 200 with a non-empty, NON-JSON body (an opaque string, no JSON
+        # content-type). Parsing that with .json() raises JSONDecodeError, so
+        # only decode when it actually looks like JSON; otherwise treat as empty.
+        if not r.content:
+            return {}
+        try:
+            return r.json()
+        except ValueError:  # JSONDecodeError subclasses ValueError
+            return {}
 
     # ---- devices ---------------------------------------------------------
 
@@ -95,15 +106,93 @@ class SpotifyClient:
     # ---- search + playback ----------------------------------------------
 
     async def search_uri(self, query: str, types: str = "track,playlist,artist,album") -> str:
+        """Resolve a free-text request to the best-matching Spotify URI.
+
+        Spotify's search returns *something* in every category for almost any
+        words (e.g. a loosely-related playlist), so simply taking the first
+        result from a fixed category order plays the wrong thing — "New Levels
+        New Devils by Polyphia" used to match a random "New To Play" playlist.
+
+        Instead we score every candidate across all types by how well its name
+        (and artist) matches the query, and return the highest-scoring URI.
+        """
         d = await self._req(
-            "GET", "/search", params={"q": query, "type": types, "limit": 1}
+            "GET", "/search", params={"q": query, "type": types, "limit": 5}
         )
-        # Prefer a context (playlist/album/artist) over a single track when present.
-        for key in ("playlists", "albums", "artists", "tracks"):
-            items = (d.get(key) or {}).get("items") or []
-            if items:
-                return items[0]["uri"]
-        raise SpotifyError(f"No Spotify results for {query!r}.")
+
+        candidates = self._gather_candidates(d)
+        if not candidates:
+            raise SpotifyError(f"No Spotify results for {query!r}.")
+
+        best = max(candidates, key=lambda c: self._score(query, c))
+        return best["uri"]
+
+    @staticmethod
+    def _gather_candidates(d: dict) -> list[dict]:
+        """Flatten the search response into scoreable candidates.
+
+        Filters out null items (Spotify returns `null` entries in the items
+        arrays, which previously crashed `items[0]["uri"]`).
+        """
+        out: list[dict] = []
+        for it in (d.get("tracks") or {}).get("items") or []:
+            if it:
+                out.append({"kind": "track", "name": it.get("name", ""),
+                            "artist": ", ".join(a["name"] for a in it.get("artists", [])),
+                            "uri": it["uri"]})
+        for it in (d.get("albums") or {}).get("items") or []:
+            if it:
+                out.append({"kind": "album", "name": it.get("name", ""),
+                            "artist": ", ".join(a["name"] for a in it.get("artists", [])),
+                            "uri": it["uri"]})
+        for it in (d.get("artists") or {}).get("items") or []:
+            if it:
+                out.append({"kind": "artist", "name": it.get("name", ""),
+                            "artist": "", "uri": it["uri"]})
+        for it in (d.get("playlists") or {}).get("items") or []:
+            if it:
+                out.append({"kind": "playlist", "name": it.get("name", ""),
+                            "artist": (it.get("owner") or {}).get("display_name", ""),
+                            "uri": it["uri"]})
+        return out
+
+    # Words in a query that signal the user wants a playlist / album.
+    _PLAYLIST_HINT = re.compile(
+        r"\b(playlist|mix|radio|vibes?|beats|chill|focus|study|workout|essentials)\b",
+        re.I,
+    )
+    _ALBUM_HINT = re.compile(r"\b(album|ep|lp)\b", re.I)
+    _WORD = re.compile(r"[a-z0-9]+")
+
+    @classmethod
+    def _norm(cls, s: str) -> str:
+        return " ".join(cls._WORD.findall((s or "").lower()))
+
+    @classmethod
+    def _score(cls, query: str, c: dict) -> float:
+        """Higher = better match. Combines name similarity, token overlap,
+        an optional 'by <artist>' match, light type priors, and intent hints."""
+        # Split a trailing "... by <artist>" so the artist boosts the artist
+        # match instead of polluting the name comparison.
+        m = re.search(r"\b(.*?)\s+by\s+(.+)$", query.strip(), re.I)
+        qname, qartist = (m.group(1).strip(), m.group(2).strip()) if m else (query.strip(), None)
+
+        qn, nm = cls._norm(qname), cls._norm(c["name"])
+        base = SequenceMatcher(None, qn, nm).ratio()
+        qtok, ntok = set(qn.split()), set(nm.split())
+        overlap = len(qtok & ntok) / max(1, len(qtok))
+        s = 0.6 * base + 0.4 * overlap
+        if qn == nm:
+            s += 0.5
+        if qartist and c["artist"]:
+            s += 0.5 * SequenceMatcher(None, cls._norm(qartist), cls._norm(c["artist"])).ratio()
+
+        s += {"track": 0.10, "album": 0.10, "artist": 0.08, "playlist": 0.0}[c["kind"]]
+        if c["kind"] == "playlist" and cls._PLAYLIST_HINT.search(query):
+            s += 0.45
+        if c["kind"] == "album" and cls._ALBUM_HINT.search(query):
+            s += 0.3
+        return s
 
     async def play(self, uri: str, device_id: str | None = None):
         params = {"device_id": device_id} if device_id else {}
