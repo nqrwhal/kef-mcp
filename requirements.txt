@@ -2,3 +2,8 @@ fastmcp>=2.3.0
 httpx>=0.27
 uvicorn>=0.30
 starlette>=0.37
+# Google Cast control (connect-by-IP; we don't use its mDNS discovery).
+PyChromecast>=14
+# Resolves YouTube/SoundCloud queries+URLs to direct stream URLs. Updates often
+# as sites change -- bump this and rebuild the image when extraction breaks.
+yt-dlp>=2024.0
