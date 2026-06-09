@@ -27,6 +27,27 @@ MCP client ──► kef-mcp ──┬─ HTTP ─► KEF speaker (LAN)
 | `spotify_pause` / `spotify_skip` | Spotify-side control. |
 | `spotify_set_volume(level)` | Volume on the active Spotify device. |
 | `spotify_now_playing` | Track / artist / device. |
+| `cast_url(url, volume?)` | Cast a direct audio/radio stream URL (non-Spotify). |
+| `play_radio(query_or_url, volume?)` | Internet radio via a direct stream URL. |
+| `play_from_youtube(query, volume?)` | Play YouTube/SoundCloud audio (search or URL). |
+| `cast_stop` / `cast_pause` / `cast_resume` | Cast transport control. |
+| `cast_status` | What's playing via Cast. |
+
+### Playing non-Spotify audio (Google Cast)
+
+The KEF has Chromecast built-in. The `cast_*` / `play_radio` / `play_from_youtube`
+tools cast an HTTP(S) audio URL to the speaker (it pulls the stream itself and
+auto-wakes to wifi, like Spotify Connect). `play_from_youtube` uses `yt-dlp` to
+turn a query or page URL into a stream URL first.
+
+- **Same-LAN requirement:** the server reaches the speaker's Cast channel on
+  **TCP 8009** by IP (no mDNS). In Docker this works over the same bridge the
+  KEF HTTP API already uses — but confirm 8009 is reachable from the container.
+- **YouTube can break:** site changes occasionally break extraction. Fix =
+  bump `yt-dlp` in `requirements.txt` and rebuild the image.
+- **UPnP/DLNA does NOT work** on this hardware — the speaker firmware blocks
+  `SetAVTransportURI`, so generic DLNA casting fails. Google Cast is the
+  supported non-Spotify path.
 
 ## Prerequisites
 
@@ -126,6 +147,8 @@ kef-mcp/
 ├── server.py             # MCP server: defines the tools
 ├── kef_client.py         # KEF local HTTP API client
 ├── spotify_client.py     # Spotify Web API client
+├── cast_client.py        # Google Cast (Chromecast built-in) client
+├── youtube_resolver.py   # yt-dlp: query/URL -> direct stream URL
 ├── auth_spotify.py       # one-time Spotify OAuth helper
 ├── Dockerfile
 ├── docker-compose.yml    # server + poke-tunnel sidecar

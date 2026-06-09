@@ -15,8 +15,10 @@ import re
 
 from fastmcp import FastMCP
 
+from cast_client import CastClient, CastError
 from kef_client import KefClient, KefError
 from spotify_client import SpotifyClient, SpotifyError
+from youtube_resolver import resolve_stream_url
 
 # ---- config from env ----------------------------------------------------
 
@@ -43,6 +45,14 @@ def _need_kef() -> KefClient:
     if kef is None:
         raise KefError("KEF_HOST is not set; KEF tools are disabled.")
     return kef
+
+
+def _cast() -> CastClient:
+    # Cast reuses the KEF's LAN IP -- the speaker's Chromecast control channel
+    # lives on the same host. No separate env var needed.
+    if not KEF_HOST:
+        raise CastError("KEF_HOST is not set; Cast tools are disabled.")
+    return CastClient(KEF_HOST)
 
 
 # Bearer-token auth so only your Poke can reach the tools.
@@ -155,6 +165,107 @@ async def spotify_set_volume(level: int) -> str:
     """Set Spotify playback volume (0-100) on the active device."""
     await _spotify().set_volume(level)
     return f"Spotify volume set to {level}."
+
+
+# ====================== Google Cast tools ======================
+# These play NON-Spotify audio: internet radio, direct stream URLs, and
+# YouTube/SoundCloud (resolved to a stream URL). The speaker has Chromecast
+# built-in; casting auto-wakes it and switches it to wifi, like Spotify Connect.
+
+
+async def _cast_then_volume(
+    url: str,
+    title: str | None,
+    volume: int | None,
+    *,
+    content_type: str | None = None,
+    is_live: bool | None = None,
+) -> None:
+    """Set KEF hardware volume (if asked) then cast the URL. Volume goes to the
+    KEF hardware -- the same loudness control as play_on_kef -- not the Cast
+    receiver session volume, so it behaves consistently across all play tools."""
+    if volume is not None and kef is not None:
+        await kef.set_volume(volume)
+    await _cast().play_url(
+        url, title=title, content_type=content_type, is_live=is_live
+    )
+
+
+@mcp.tool
+async def cast_url(url: str, volume: int | None = None) -> str:
+    """Play a direct audio stream URL on the KEF via Google Cast.
+
+    Use this for internet radio, podcast audio, or any direct .mp3/.aac/.flac/
+    stream URL. NOT for Spotify (use play_on_kef) or YouTube (use
+    play_from_youtube). `volume` optionally sets the KEF hardware volume (0-100).
+    """
+    await _cast_then_volume(url, None, volume)
+    return f"Casting {url} to the KEF."
+
+
+@mcp.tool
+async def play_radio(query_or_url: str, volume: int | None = None) -> str:
+    """Play internet radio / a direct stream URL on the KEF via Google Cast.
+
+    Pass a direct stream URL (e.g. an Icecast/Shoutcast .mp3 endpoint).
+    `volume` optionally sets the KEF hardware volume (0-100).
+    """
+    await _cast_then_volume(query_or_url, None, volume)
+    return f"Playing radio: {query_or_url}"
+
+
+@mcp.tool
+async def play_from_youtube(query: str, volume: int | None = None) -> str:
+    """Play audio from YouTube (or SoundCloud / other sites) on the KEF via Cast.
+
+    `query` can be a search phrase ("daft punk discovery") or a direct
+    YouTube/SoundCloud URL. The audio stream is resolved and cast to the KEF.
+    Use this when the user wants something from YouTube specifically; for music
+    by name, prefer play_on_kef (Spotify). `volume` optionally sets the KEF
+    hardware volume (0-100).
+
+    Note: 24/7 YouTube *livestreams* (e.g. "lofi hip hop radio") only offer HLS,
+    which this speaker's Cast receiver can't play -- use a normal video/track,
+    or use play_radio with a direct radio stream URL for continuous audio.
+    """
+    r = await resolve_stream_url(query)
+    if r["is_hls"]:
+        # The KEF's Cast Default Media Receiver does not play HLS (verified
+        # against Apple's reference HLS stream too), so livestreams won't work.
+        raise CastError(
+            f"'{r['title']}' is a livestream (HLS), which this KEF's Cast "
+            f"receiver can't play. Try a normal video/track, or play_radio with "
+            f"a direct stream URL for continuous audio."
+        )
+    await _cast_then_volume(r["url"], r["title"], volume, is_live=r["is_live"])
+    return f"Playing '{r['title']}' on the KEF (from YouTube)."
+
+
+@mcp.tool
+async def cast_stop() -> str:
+    """Stop Cast playback on the KEF and close the Cast receiver."""
+    await _cast().stop()
+    return "Stopped casting."
+
+
+@mcp.tool
+async def cast_pause() -> str:
+    """Pause the current Cast playback on the KEF."""
+    await _cast().pause()
+    return "Paused Cast playback."
+
+
+@mcp.tool
+async def cast_resume() -> str:
+    """Resume paused Cast playback on the KEF."""
+    await _cast().resume()
+    return "Resumed Cast playback."
+
+
+@mcp.tool
+async def cast_status() -> dict:
+    """What's currently playing on the KEF via Google Cast."""
+    return await _cast().status()
 
 
 # ====================== The main combined tool ======================
